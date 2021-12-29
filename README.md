@@ -1,4 +1,7 @@
 # Python Music Bot
 
- A music bot written in Python using [hikari-lightbulb](https://github.com/tandemdude/hikari-lightbulb) and [songbird-py](https://github.com/Lunarmagpie/Songbird-Py). Supports YouTube.
+ A music bot written in Python using [hikari-lightbulb](https://github.com/tandemdude/hikari-lightbulb) and [lavasnek-rs](hhttps://github.com/vicky5124/lavasnek_rs).
 
+## Requirements
+
+ Python 3.8 and above, A [lavalink](https://github.com/freyacodes/Lavalink) server running on linux natively or with WSL, Rust Compiler.
