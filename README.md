@@ -4,4 +4,4 @@
 
 ## Requirements
 
- Python 3.8 and above, A [lavalink](https://github.com/freyacodes/Lavalink) server running on linux natively or with WSL, Rust Compiler.
+ Python 3.8 and above, A [lavalink](https://github.com/freyacodes/Lavalink) server running on linux natively or with WSL.
