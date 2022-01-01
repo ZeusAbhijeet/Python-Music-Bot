@@ -5,7 +5,7 @@ import lightbulb
 from consts import OWNER_ID, PREFIX, TOKEN
 
 # You may want to enable ALL intents here
-bot = lightbulb.BotApp(token=TOKEN, prefix=PREFIX, owner_ids=[OWNER_ID], case_insensitive_prefix_commands=True, delete_unbound_commands=True)
+bot = lightbulb.BotApp(token=TOKEN, prefix=PREFIX, owner_ids=[OWNER_ID], case_insensitive_prefix_commands=True, delete_unbound_commands=True, allow_color=False)
 
 
 @bot.listen()
