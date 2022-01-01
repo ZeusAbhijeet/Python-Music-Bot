@@ -3,10 +3,11 @@ from typing import Optional
 
 import hikari
 import lightbulb
+import lavasnek_rs
+import random
 from consts import LAVALINK_PASSWORD, PREFIX, TOKEN
 from lightbulb.utils import pag, nav
-
-import lavasnek_rs
+from lightbulb.ext import neon
 
 # If True connect to voice with the hikari gateway instead of lavasnek_rs's
 HIKARI_VOICE = False
@@ -34,6 +35,67 @@ class EventHandler:
 
         if skip and not node.queue and not node.now_playing:
             await lavalink.stop(event.guild_id)
+
+class NowPlayingButtons(neon.ComponentMenu):
+    @neon.button("Play/Pause", "play_pause", hikari.ButtonStyle.PRIMARY, emoji = "⏯")
+    async def play_pause(self, button : neon.Button) -> None:
+        node = await plugin.bot.d.lavalink.get_guild_node(self.context.guild_id)
+        if not node.is_paused:
+            await plugin.bot.d.lavalink.pause(self.context.guild_id)
+            await self.inter.create_initial_response(
+                hikari.ResponseType.MESSAGE_CREATE,
+                content = f":pause_button: Paused player",
+                flags = hikari.MessageFlag.EPHEMERAL
+            )
+        else:
+            await plugin.bot.d.lavalink.resume(self.context.guild_id)
+            await self.inter.create_initial_response(
+                hikari.ResponseType.MESSAGE_CREATE,
+                content = f":arrow_forward: Resumed player",
+                flags = hikari.MessageFlag.EPHEMERAL
+            )
+    
+    @neon.button("Skip", "skip", hikari.ButtonStyle.PRIMARY, emoji = '⏩')
+    async def skip(self, button : neon.Button) -> None:
+        skip = await plugin.bot.d.lavalink.skip(self.context.guild_id)
+        node = await plugin.bot.d.lavalink.get_guild_node(self.context.guild_id)
+
+        if not skip:
+            await self.inter.create_initial_response(
+                hikari.ResponseType.MESSAGE_CREATE,
+                content = f":caution: Nothing to skip",
+                flags = hikari.MessageFlag.EPHEMERAL
+            )
+        else:
+            # If the queue is empty, the next track won't start playing (because there isn't any),
+            # so we stop the player.
+            if not node.queue and not node.now_playing:
+                await plugin.bot.d.lavalink.stop(self.context.guild_id)
+                await self.edit_msg(
+                    embed = hikari.Embed(
+                        description = "Nothing is playing."
+                    )
+                )
+            
+            await self.inter.create_initial_response(
+                hikari.ResponseType.MESSAGE_CREATE,
+                content = f":fast_forward: Skipped: {skip.track.info.title}",
+                flags = hikari.MessageFlag.EPHEMERAL
+            )
+        
+    @neon.button("Stop", "stop", hikari.ButtonStyle.DANGER, emoji = '⏹')
+    async def stop(self, button : neon.Button) -> None:
+        await plugin.bot.d.lavalink.stop(self.context.guild_id)
+        await self.edit_msg(
+            embed = hikari.Embed(
+                description = "Nothing is playing."
+            )
+        )
+        await self.inter.create_initial_response(
+            hikari.ResponseType.MESSAGE_CREATE,
+            content = f":stop_button: Stopped playing",
+            flags = hikari.MessageFlag.EPHEMERAL
+        )
 
 
 plugin = lightbulb.Plugin("Music")
@@ -172,7 +234,6 @@ async def play(ctx: lightbulb.Context) -> None:
             await ctx.respond(f"Use `{PREFIX}join` first")
         
         await ctx.respond(
-            f"Added to queue: {query_information.playlist_info.name}",
             embed = hikari.Embed(
                 description = f"{query_information.playlist_info.name} ({len(query_information.tracks)} tracks) added to queue [{ctx.author.mention}]",
                 colour = 0x76ffa1
@@ -188,7 +249,6 @@ async def play(ctx: lightbulb.Context) -> None:
             return
 
         await ctx.respond(
-            f"Added to queue: {query_information.tracks[0].info.title}",
             embed = hikari.Embed(
                 description = f"[{query_information.tracks[0].info.title}]({query_information.tracks[0].info.uri}) added to queue [{ctx.author.mention}]",
                 colour = 0x76ffa1
@@ -205,6 +265,9 @@ async def stop(ctx: lightbulb.Context) -> None:
     """Stops the current song (skip to continue)."""
 
     await plugin.bot.d.lavalink.stop(ctx.guild_id)
+    node = await plugin.bot.d.lavalink.get_guild_node(ctx.guild_id)
+    node.queue = []
+    await plugin.bot.d.lavalink.set_guild_node(ctx.guild_id, node)
     await ctx.respond(
         embed = hikari.Embed(
             description = ":stop_button: Stopped playing",
@@ -232,8 +295,9 @@ async def skip(ctx: lightbulb.Context) -> None:
             await plugin.bot.d.lavalink.stop(ctx.guild_id)
 
         await ctx.respond(
+            
             embed = hikari.Embed(
-                description = f":fast_forward: Skipped: {skip.track.info.title}",
+                description =   f":fast_forward: Skipped: [{skip.track.info.title}]({skip.track.info.uri})",
                 colour = 0xd25557
             )
         )
@@ -273,6 +337,32 @@ async def resume(ctx: lightbulb.Context) -> None:
 
 @plugin.command()
 @lightbulb.add_checks(lightbulb.guild_only)
+@lightbulb.command("shuffle", "Shuffles the queue.")
+@lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
+async def shuffle(ctx : lightbulb.Context) -> None:
+
+    node = await plugin.bot.d.lavalink.get_guild_node(ctx.guild_id)
+
+    if not node or not node.queue:
+        await ctx.respond("Nothing is playing at the moment.")
+        return
+
+    old_queue : list = node.queue
+    if old_queue and len(old_queue) > 1:
+        first_q = old_queue[0]
+        old_queue.pop(0)
+        old_queue = random.sample(old_queue, len(old_queue))
+        old_queue.insert(0, first_q)
+
+        node.queue = old_queue
+        
+        await plugin.bot.d.lavalink.set_guild_node(ctx.guild_id, node)
+    
+    await ctx.respond("Shuffled.")
+
+
+@plugin.command()
+@lightbulb.add_checks(lightbulb.guild_only)
 @lightbulb.command("nowplaying", "Gets the song that's currently playing.", aliases=["np"])
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def now_playing(ctx: lightbulb.Context) -> None:
@@ -285,7 +375,42 @@ async def now_playing(ctx: lightbulb.Context) -> None:
         return
 
     # for queue, iterate over `node.queue`, where index 0 is now_playing.
-    await ctx.respond(f"Now Playing: {node.now_playing.track.info.title}")
+    amount = node.now_playing.track.info.length
+    millis = int(amount)
+    l_seconds=(millis/1000)%60
+    l_seconds = int(l_seconds)
+    l_minutes=(millis/(1000*60))%60
+    l_minutes = int(l_minutes)
+    first_n = int(l_seconds/10)
+    queue_amount = 0
+    for q in node.queue:
+        queue_amount += int(q.track.info.length)
+    q_seconds=(queue_amount/1000)%60
+    q_seconds = int(q_seconds)
+    q_minutes=(queue_amount/(1000*60))%60
+    q_minutes = int(q_minutes)
+    first_n_q = int(q_seconds/10)
+
+    menu = NowPlayingButtons(ctx)
+    resp = await ctx.respond(
+        embed = hikari.Embed(
+            title = "Now Playing",
+            description = f"[{node.now_playing.track.info.title}]({node.now_playing.track.info.uri})",
+            colour = 0x76ffa1
+        ).add_field(
+            name = "Length:", value = f"{l_minutes}:{l_seconds if first_n != 0 else f'0{l_seconds}'}", inline = True
+        ).add_field(
+            name = "Requested by:", value = f"<@!{node.now_playing.requester}>", inline = True
+        ).add_field(
+            name = "Up Next:", value = f"[{node.queue[1].track.info.title}]({node.queue[1].track.info.uri})" if len(node.queue) > 1 else f"Nothing else in queue"
+        ).set_footer(
+            text = f"Total Queue Length : {q_minutes}:{q_seconds if first_n_q != 0 else f'0{q_seconds}'}"
+        ).set_thumbnail(
+            f"https://img.youtube.com/vi/{node.now_playing.track.info.identifier}/maxresdefault.jpg"
+        ),
+        #components = menu.build()
+    )
+    #await menu.run(resp)
 
 @plugin.command()
 @lightbulb.add_checks(lightbulb.guild_only)
@@ -302,10 +427,24 @@ async def queue(ctx : lightbulb.Context) -> None:
         await ctx.respond("Nothing in queue")
     else:
         #page_queue = pag.StringPaginator(max_lines = 10, suffix = "```", prefix = "```")
-        EmbPag.add_line(f"Now playing: [{node.queue[0].track.info.title}]({node.queue[0].track.info.uri})  Requested by <@!{node.queue[0].requester}> \n\nUp next:")
+        amount = node.now_playing.track.info.length
+        millis = int(amount)
+        l_seconds=(millis/1000)%60
+        l_seconds = int(l_seconds)
+        l_minutes=(millis/(1000*60))%60
+        l_minutes = int(l_minutes)
+        first_n = int(l_seconds/10)
+        EmbPag.add_line(f"Now playing: [{node.now_playing.track.info.title}]({node.now_playing.track.info.uri}) `{l_minutes}:{l_seconds if first_n != 0 else f'0{l_seconds}'}` [<@!{node.now_playing.requester}>] \n\nUp next:")
         i = 1
         while True:
-            EmbPag.add_line(f"[{i}. {node.queue[i].track.info.title}]({node.queue[i].track.info.uri})  Requested by <@!{node.queue[0].requester}>")
+            amount = node.queue[i].track.info.length
+            millis = int(amount)
+            l_seconds=(millis/1000)%60
+            l_seconds = int(l_seconds)
+            l_minutes=(millis/(1000*60))%60
+            l_minutes = int(l_minutes)
+            first_n = int(l_seconds/10)
+            EmbPag.add_line(f"[{i}. {node.queue[i].track.info.title}]({node.queue[i].track.info.uri}) `{l_minutes}:{l_seconds if first_n != 0 else f'0{l_seconds}'}` [<@!{node.queue[0].requester}>]")
             i += 1
             if i >= len(node.queue):
                 break

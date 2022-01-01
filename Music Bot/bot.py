@@ -2,10 +2,10 @@ import os
 
 import hikari
 import lightbulb
-from consts import PREFIX, TOKEN
+from consts import OWNER_ID, PREFIX, TOKEN
 
 # You may want to enable ALL intents here
-bot = lightbulb.BotApp(token=TOKEN, prefix=PREFIX)
+bot = lightbulb.BotApp(token=TOKEN, prefix=PREFIX, owner_ids=[OWNER_ID], case_insensitive_prefix_commands=True, delete_unbound_commands=True)
 
 
 @bot.listen()
@@ -21,6 +21,11 @@ async def ping(ctx: lightbulb.Context) -> None:
     """Typical Ping-Pong command"""
     await ctx.respond("Ping?")
 
+@bot.command()
+@lightbulb.command("about", "About the bot.")
+@lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
+async def about(ctx : lightbulb.Context) -> None:
+    await ctx.respond(f"Adding this soon.")
 
 if __name__ == "__main__":
     if os.name != "nt":
