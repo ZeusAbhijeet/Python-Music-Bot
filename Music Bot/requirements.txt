@@ -1,4 +1,7 @@
-hikari==2.0.0.dev104
+hikari==2.0.0.dev105
 hikari-lightbulb==2.1.2
 uvloop>=0.16; sys_platform != 'win32'
 lavasnek_rs==0.1.0a3
+spotipy==2.19.0
+lightbulb-ext-neon @ git+https://github.com/neonjonn/lightbulb-ext-neon.git
+lyricsgenius==3.0.1
