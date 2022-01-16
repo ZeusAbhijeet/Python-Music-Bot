@@ -545,15 +545,31 @@ async def seek(ctx: lightbulb.Context) -> None:
 
 @plugin.command()
 @lightbulb.add_checks(lightbulb.guild_only)
-@lightbulb.option("song", "The name of the song you want lyrics for.", modifier=lightbulb.OptionModifier.CONSUME_REST)
-@lightbulb.command("lyrics", "Niko searches for the lyrics of any song of your choice!")
+@lightbulb.option("song", "The name of the song you want lyrics for.", modifier=lightbulb.OptionModifier.CONSUME_REST, required = False)
+@lightbulb.command("lyrics", "Searches for the lyrics of the current song or any song of your choice!")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def lyrics(ctx: lightbulb.Context) -> None:
     genius = lyricsgenius.Genius(GENIUS_ACCESS_TOKEN)
     genius.verbose = True
     genius.remove_section_headers = False
     genius.skip_non_songs = True
-    song = genius.search_song(f"{ctx.options.song}")
+
+    node = await plugin.bot.d.lavalink.get_guild_node(ctx.guild_id)
+
+    if not node or not node.now_playing:
+        song = genius.search_song(f"{ctx.options.song}")
+    else:
+        song = genius.search_song(f"{node.now_playing.track.info.title}", f"{node.now_playing.track.info.author}")
+
+    if not song:
+        await ctx.respond(
+            embed = hikari.Embed(
+                title="Lyrics Search Failed", 
+                description=f"Could not find the song. Check the song and artist name and try again.", 
+                color=0xC80000
+            )
+        )
+
     test_stirng = f"{song.lyrics}"
     total = 1
     for i in range(len(test_stirng)):
@@ -562,7 +578,7 @@ async def lyrics(ctx: lightbulb.Context) -> None:
     if total > 650:
       embed=hikari.Embed(title="Character Limit Exceeded!", description=f"The lyrics in this song are too long. (Over 6000 characters)", color=0xC80000)
       await ctx.respond(embed=embed)
-    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id="15c63dca66d74f85b99cef2da094f9f1",client_secret="3fc73e1addef4cd9b14eb7c74a04c00f"))
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID,client_secret=SPOTIFY_CLIENT_SECRET))
     results = sp.search(q=f'{ctx.options.song}', limit=1)
     for idx, track in enumerate(results['tracks']['items']):
        querytrack = track['name']
