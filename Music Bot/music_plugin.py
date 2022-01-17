@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from typing import Optional
 
 import hikari
@@ -25,11 +24,32 @@ TIME_REGEX = r"([0-9]{1,2})[:ms](([0-9]{1,2})s?)?"
 class EventHandler:
     """Events from the Lavalink server"""
 
-    async def track_start(self, _: lavasnek_rs.Lavalink, event: lavasnek_rs.TrackStart) -> None:
+    async def track_start(self, lavalink: lavasnek_rs.Lavalink, event: lavasnek_rs.TrackStart) -> None:
         logging.info("Track started on guild: %s", event.guild_id)
 
-    async def track_finish(self, _: lavasnek_rs.Lavalink, event: lavasnek_rs.TrackFinish) -> None:
+        # If your bot is going to be in multiple servers, I recommend removing the following code.
+        # Since my bot is going to be used in just one server, I am setting the currently playing song as the Activity.
+        node = await lavalink.get_guild_node(event.guild_id)
+
+        await plugin.bot.update_presence(
+            activity = hikari.Activity(
+                name = f"{node.now_playing.track.info.author} - {node.now_playing.track.info.title}",
+                type = hikari.ActivityType.PLAYING
+            )
+        )
+
+    async def track_finish(self, lavalink: lavasnek_rs.Lavalink, event: lavasnek_rs.TrackFinish) -> None:
         logging.info("Track finished on guild: %s", event.guild_id)
+
+        node = await lavalink.get_guild_node(event.guild_id)
+
+        if not node.queue:
+            await plugin.bot.update_presence(
+                activity = hikari.Activity(
+                    name = f"/play",
+                    type = hikari.ActivityType.LISTENING
+                )
+            )
 
     async def track_exception(self, lavalink: lavasnek_rs.Lavalink, event: lavasnek_rs.TrackException) -> None:
         logging.warning("Track exception event happened on guild: %d", event.guild_id)
@@ -112,12 +132,18 @@ async def _join(ctx: lightbulb.Context) -> Optional[hikari.Snowflake]:
 
     states = plugin.bot.cache.get_voice_states_view_for_guild(ctx.guild_id)
     voice_state = [state async for state in states.iterator().filter(lambda i: i.user_id == ctx.author.id)]
+    bot_voice_state = [state async for state in states.iterator().filter(lambda i: i.user_id == ctx.bot.get_me().id)]
 
     if not voice_state:
         await ctx.respond("Connect to a voice channel first.")
         return None
 
     channel_id = voice_state[0].channel_id
+
+    if bot_voice_state:
+        if channel_id != bot_voice_state[0].channel_id:
+            await ctx.respond("I am already playing in another Voice Channel.")
+            return None
 
     if HIKARI_VOICE:
         assert ctx.guild_id is not None
@@ -138,6 +164,23 @@ async def _join(ctx: lightbulb.Context) -> Optional[hikari.Snowflake]:
 
     return channel_id
 
+async def requester_check(ctx: lightbulb.Context) -> bool:
+    states = plugin.bot.cache.get_voice_states_view_for_guild(ctx.guild_id)
+    voice_state = [state async for state in states.iterator().filter(lambda i: i.user_id == ctx.author.id)]
+    bot_voice_state = [state async for state in states.iterator().filter(lambda i: i.user_id == ctx.bot.get_me().id)]
+
+    if not voice_state:
+        return False
+
+    channel_id = voice_state[0].channel_id
+
+    if bot_voice_state:
+        if channel_id != bot_voice_state[0].channel_id:
+            return False
+        else:
+            return True
+    else:
+        return False
 
 @plugin.listener(hikari.ShardReadyEvent)
 async def start_lavalink(event: hikari.ShardReadyEvent) -> None:
@@ -173,7 +216,7 @@ async def join(ctx: lightbulb.Context) -> None:
 
 
 @plugin.command()
-@lightbulb.add_checks(lightbulb.guild_only)
+@lightbulb.add_checks(lightbulb.guild_only, lightbulb.Check(requester_check, requester_check))
 @lightbulb.command("leave", "Leaves the voice channel the bot is in, clearing the queue.")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def leave(ctx: lightbulb.Context) -> None:
@@ -226,6 +269,13 @@ async def play(ctx: lightbulb.Context) -> None:
             playlist_link = query
             playlist_URI = playlist_link.split("/")[-1].split("?")[0]
             track_uris = [x["track"]["uri"] for x in sp.playlist_tracks(playlist_URI)["items"]]
+            playlist_info = sp.playlist(playlist_URI, fields = "name")
+            await ctx.respond(
+                embed = hikari.Embed(
+                    description = f"[{playlist_info['name']}]({query}) ({len(track_uris)} tracks) added to queue [{ctx.author.mention}].",
+                    colour = 0x76ffa1
+                )  
+            )
             for track in sp.playlist_tracks(playlist_URI)["items"]:
                 track_name = track["track"]["name"]
                 track_artist = track["track"]["artists"][0]["name"]
@@ -254,7 +304,6 @@ async def play(ctx: lightbulb.Context) -> None:
         
         elif "track" in query:
             isSpotifySong = True
-            sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id="15c63dca66d74f85b99cef2da094f9f1",client_secret="3fc73e1addef4cd9b14eb7c74a04c00f"))
             track_link = query
             track_id = track_link.split("/")[-1].split("?")[0]
             track_info = sp.track(track_id)
@@ -265,15 +314,7 @@ async def play(ctx: lightbulb.Context) -> None:
             query_information = await plugin.bot.d.lavalink.get_tracks(result)
             await plugin.bot.d.lavalink.play(ctx.guild_id, query_information.tracks[0]).requester(ctx.author.id).queue()
 
-        if playlist:
-            playlist_info = sp.playlist(playlist_URI, fields = "name")
-            await ctx.respond(
-                embed = hikari.Embed(
-                    description = f"[{playlist_info['name']}]({query}) ({i} tracks) added to queue [{ctx.author.mention}].",
-                    colour = 0x76ffa1
-                )  
-            )
-        elif isAlbum:
+        if isAlbum:
             album_info = sp.album(album_id)
             await ctx.respond(
                 embed = hikari.Embed(
@@ -334,8 +375,8 @@ async def play(ctx: lightbulb.Context) -> None:
 
 
 @plugin.command()
-@lightbulb.add_checks(lightbulb.guild_only)
-@lightbulb.command("stop", "Stops the current song (skip to continue).")
+@lightbulb.add_checks(lightbulb.guild_only, lightbulb.Check(requester_check, requester_check))
+@lightbulb.command("stop", "Stops the current song and clears queue.")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def stop(ctx: lightbulb.Context) -> None:
     """Stops the current song (skip to continue)."""
@@ -344,6 +385,7 @@ async def stop(ctx: lightbulb.Context) -> None:
     node = await plugin.bot.d.lavalink.get_guild_node(ctx.guild_id)
     node.queue = []
     await plugin.bot.d.lavalink.set_guild_node(ctx.guild_id, node)
+    skip = await plugin.bot.d.lavalink.skip(ctx.guild_id)
     
     await ctx.respond(
         embed = hikari.Embed(
@@ -354,7 +396,7 @@ async def stop(ctx: lightbulb.Context) -> None:
 
 
 @plugin.command()
-@lightbulb.add_checks(lightbulb.guild_only)
+@lightbulb.add_checks(lightbulb.guild_only, lightbulb.Check(requester_check, requester_check))
 @lightbulb.command("skip", "Skips the current song.")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def skip(ctx: lightbulb.Context) -> None:
@@ -381,7 +423,7 @@ async def skip(ctx: lightbulb.Context) -> None:
 
 
 @plugin.command()
-@lightbulb.add_checks(lightbulb.guild_only)
+@lightbulb.add_checks(lightbulb.guild_only, lightbulb.Check(requester_check, requester_check))
 @lightbulb.command("pause", "Pauses the current song.")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def pause(ctx: lightbulb.Context) -> None:
@@ -397,7 +439,7 @@ async def pause(ctx: lightbulb.Context) -> None:
 
 
 @plugin.command()
-@lightbulb.add_checks(lightbulb.guild_only)
+@lightbulb.add_checks(lightbulb.guild_only, lightbulb.Check(requester_check, requester_check))
 @lightbulb.command("resume", "Resumes playing the current song.")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
 async def resume(ctx: lightbulb.Context) -> None:
@@ -471,26 +513,13 @@ async def queue(ctx : lightbulb.Context) -> None:
         await ctx.respond("Nothing in queue")
         return
     else:
-        amount = node.now_playing.track.info.length
-        millis = int(amount)
-        l_seconds=(millis/1000)%60
-        l_seconds = int(l_seconds)
-        l_minutes=(millis/(1000*60))%60
-        l_minutes = int(l_minutes)
-        first_n = int(l_seconds/10)
-        
-        queueDescription = f"Now playing: [{node.now_playing.track.info.title}]({node.now_playing.track.info.uri}) `{l_minutes}:{l_seconds if first_n != 0 else f'0{l_seconds}'}` [<@!{node.now_playing.requester}>] \n\nUp next:"
+        length = divmod(node.now_playing.track.info.length, 60000)
+        queueDescription = f"Now playing: [{node.now_playing.track.info.title}]({node.now_playing.track.info.uri}) `{int(length[0])}:{round(length[1]/1000):02}` [<@!{node.now_playing.requester}>] \n\nUp next:"
         # EmbPag.add_line(f"Now playing: [{node.now_playing.track.info.title}]({node.now_playing.track.info.uri}) `{l_minutes}:{l_seconds if first_n != 0 else f'0{l_seconds}'}` [<@!{node.now_playing.requester}>] \n\nUp next:")
         i = 1
         while True:
-            amount = node.queue[i].track.info.length
-            millis = int(amount)
-            l_seconds=(millis/1000)%60
-            l_seconds = int(l_seconds)
-            l_minutes=(millis/(1000*60))%60
-            l_minutes = int(l_minutes)
-            first_n = int(l_seconds/10)
-            queueDescription = queueDescription + f"\n[{i}. {node.queue[i].track.info.title}]({node.queue[i].track.info.uri}) `{l_minutes}:{l_seconds if first_n != 0 else f'0{l_seconds}'}` [<@!{node.queue[0].requester}>]"
+            length = divmod(node.queue[i].track.info.length, 60000)
+            queueDescription = queueDescription + f"\n[{i}. {node.queue[i].track.info.title}]({node.queue[i].track.info.uri}) `{int(length[0])}:{round(length[1]/1000):02}` [<@!{node.queue[i].requester}>]"
             i += 1
             if i >= len(node.queue) or i > 10:
                 break
@@ -506,7 +535,7 @@ async def queue(ctx : lightbulb.Context) -> None:
     #await navigator.run(ctx)
 
 @plugin.command()
-@lightbulb.add_checks(lightbulb.guild_only)
+@lightbulb.add_checks(lightbulb.guild_only, lightbulb.Check(requester_check, requester_check))
 @lightbulb.option("time", "What time you would like to seek to.", modifier=lightbulb.OptionModifier.CONSUME_REST)
 @lightbulb.command("seek", "Seek to a specific point in a song.")
 @lightbulb.implements(lightbulb.PrefixCommand, lightbulb.SlashCommand)
@@ -556,10 +585,12 @@ async def lyrics(ctx: lightbulb.Context) -> None:
 
     node = await plugin.bot.d.lavalink.get_guild_node(ctx.guild_id)
 
-    if not node or not node.now_playing:
+    if not node or not node.now_playing or ctx.options.song:
         song = genius.search_song(f"{ctx.options.song}")
+        title = song.full_title
     else:
         song = genius.search_song(f"{node.now_playing.track.info.title}", f"{node.now_playing.track.info.author}")
+        title = node.now_playing.track.info.title
 
     if not song:
         await ctx.respond(
@@ -569,22 +600,18 @@ async def lyrics(ctx: lightbulb.Context) -> None:
                 color=0xC80000
             )
         )
+        return
 
     test_stirng = f"{song.lyrics}"
     total = 1
     for i in range(len(test_stirng)):
-      if(test_stirng[i] == ' ' or test_stirng == '\n' or test_stirng == '\t'):
-        total = total + 1
+        if(test_stirng[i] == ' ' or test_stirng == '\n' or test_stirng == '\t'):
+            total = total + 1
     if total > 650:
-      embed=hikari.Embed(title="Character Limit Exceeded!", description=f"The lyrics in this song are too long. (Over 6000 characters)", color=0xC80000)
-      await ctx.respond(embed=embed)
-    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID,client_secret=SPOTIFY_CLIENT_SECRET))
-    results = sp.search(q=f'{ctx.options.song}', limit=1)
-    for idx, track in enumerate(results['tracks']['items']):
-       querytrack = track['name']
-       queryartist = track["artists"][0]["name"]
-       queryfinal =f"{queryartist}" + " " + f"{querytrack}"
-    embed2=hikari.Embed(title=f"{querytrack}" ,description=f"{song.lyrics}", color=0xD7CBCC)
+        embed=hikari.Embed(title="Character Limit Exceeded!", description=f"The lyrics in this song are too long. (Over 6000 characters)", color=0xC80000)
+        await ctx.respond(embed=embed)
+        return
+    embed2=hikari.Embed(title=f"{title}" ,description=f"{song.lyrics}", color=0xD7CBCC)
     await ctx.respond(embed=embed2)
 
 if HIKARI_VOICE:
